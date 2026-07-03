@@ -35,13 +35,17 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/sessions":
-            self._send_json({"sessions": trace_parsers.list_sessions()})
+            try:
+                self._send_json({"sessions": trace_parsers.list_sessions()})
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                # A bad trace must never kill the endpoint.
+                self._send_json({"error": f"{type(exc).__name__}: {exc}"}, status=500)
         elif parsed.path == "/api/session":
             session_id = parse_qs(parsed.query).get("id", [""])[0]
             try:
                 self._send_json(trace_parsers.load_session(session_id))
-            except (ValueError, OSError, json.JSONDecodeError) as exc:
-                self._send_json({"error": str(exc)}, status=400)
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                self._send_json({"error": f"{type(exc).__name__}: {exc}"}, status=400)
         else:
             super().do_GET()
 

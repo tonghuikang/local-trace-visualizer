@@ -191,10 +191,16 @@ function toolSummary(ev) {
 // Session list
 
 async function loadSessions() {
-  const res = await fetch("/api/sessions");
-  const data = await res.json();
-  state.sessions = data.sessions || [];
-  renderSessionList();
+  try {
+    const res = await fetch("/api/sessions");
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    state.sessions = data.sessions || [];
+    renderSessionList();
+  } catch (err) {
+    $("#session-list").innerHTML =
+      `<div class="empty" style="height:120px;padding:0 16px">Failed to load sessions: ${esc(String(err.message || err))}</div>`;
+  }
 }
 
 function filteredSessions() {

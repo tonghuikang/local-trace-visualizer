@@ -47,7 +47,13 @@ def _as_list(value: object) -> list[object]:
 
 def encode_session_id(source: str, path: Path) -> str:
     root = {"claude": CLAUDE_ROOT, "codex": CODEX_ROOT}[source]
-    return f"{source}:{path.resolve().relative_to(root.resolve()).as_posix()}"
+    try:
+        rel = path.resolve().relative_to(root.resolve())
+    except ValueError:
+        # Symlink whose target lives outside the trace root; keep its
+        # in-root name so the id still round-trips through decode.
+        rel = path.relative_to(root)
+    return f"{source}:{rel.as_posix()}"
 
 
 def decode_session_id(session_id: str) -> tuple[str, Path]:
@@ -59,10 +65,9 @@ def decode_session_id(session_id: str) -> tuple[str, Path]:
         raise ValueError("empty session path")
     if rel.startswith("/") or ".." in rel.split("/"):
         raise ValueError("path escapes trace root")
-    resolved = (root / rel).resolve()
-    if not resolved.is_relative_to(root.resolve()):
-        raise ValueError("path escapes trace root")
-    return source, resolved
+    # Don't resolve: symlinks inside the trace root may point elsewhere
+    # (the user put them there); the lexical checks above stop traversal.
+    return source, root / rel
 
 
 # ---------------------------------------------------------------------------
@@ -815,19 +820,28 @@ def list_sessions() -> list[JsonDict]:
             if not project_dir.is_dir():
                 continue
             for path in project_dir.glob("*.jsonl"):
-                info = _cached_preview(path, "claude")
-                cwd = info["cwd"] or project_dir.name.replace("-", "/")
-                sessions.append(_session_entry("claude", path, cwd, info["preview"]))
+                try:
+                    info = _cached_preview(path, "claude")
+                    cwd = info["cwd"] or project_dir.name.replace("-", "/")
+                    sessions.append(_session_entry("claude", path, cwd, info["preview"]))
+                except OSError:
+                    continue  # dangling symlink, unreadable file, etc.
 
     if CODEX_ROOT.is_dir():
         for path in CODEX_ROOT.rglob("rollout-*.jsonl"):
-            info = _cached_preview(path, "codex_jsonl")
-            if info.get("subagent"):
+            try:
+                info = _cached_preview(path, "codex_jsonl")
+                if info.get("subagent"):
+                    continue
+                sessions.append(_session_entry("codex", path, info["cwd"], info["preview"]))
+            except OSError:
                 continue
-            sessions.append(_session_entry("codex", path, info["cwd"], info["preview"]))
         for path in CODEX_ROOT.glob("rollout-*.json"):
-            info = _cached_preview(path, "codex_flat")
-            sessions.append(_session_entry("codex", path, info["cwd"], info["preview"]))
+            try:
+                info = _cached_preview(path, "codex_flat")
+                sessions.append(_session_entry("codex", path, info["cwd"], info["preview"]))
+            except OSError:
+                continue
 
     sessions.sort(key=lambda s: -float(str(s["mtime"])))
     return sessions
