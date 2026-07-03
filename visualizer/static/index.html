@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trace Visualizer</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128300;</text></svg>">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div id="sidebar-head">
+      <h1>Traces</h1>
+      <div id="filters">
+        <button class="chip active" data-source="all">All</button>
+        <button class="chip" data-source="claude">Claude Code</button>
+        <button class="chip" data-source="codex">Codex</button>
+      </div>
+      <input id="search" type="search" placeholder="Filter by project or text&hellip;" autocomplete="off">
+    </div>
+    <div id="session-list"><div class="empty">Loading sessions&hellip;</div></div>
+  </aside>
+  <main id="main">
+    <div id="placeholder" class="empty">
+      <div>
+        <div class="logo">&#128300;</div>
+        <p>Select a session to view its trace.</p>
+      </div>
+    </div>
+    <div id="trace" hidden>
+      <header id="trace-head"></header>
+      <div id="trace-controls">
+        <div id="view-levels">
+          <button class="chip" data-view="chat">chat</button>
+          <button class="chip" data-view="tools">+ tools</button>
+          <button class="chip" data-view="thinking">+ thinking</button>
+          <button class="chip active" data-view="all">all</button>
+        </div>
+        <button id="expand-all" class="chip">expand all</button>
+        <button id="collapse-all" class="chip">collapse all</button>
+      </div>
+      <div id="events">
+        <div id="events-main"></div>
+        <aside id="side-lane" hidden>
+          <div id="side-lane-title">subagents</div>
+          <div id="side-tabs"></div>
+          <div id="events-side"></div>
+        </aside>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

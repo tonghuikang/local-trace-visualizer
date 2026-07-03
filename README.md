@@ -1,3 +1,39 @@
+# Local Trace Visualizer
+
+A local web UI for browsing Claude Code and Codex session traces.
+
+```sh
+./serve.sh   # starts on http://localhost:3331/ (kills any previous instance)
+```
+
+It reads, live from disk (no copies, no network):
+
+- **Claude Code**: `~/.claude/projects/<project>/<session>.jsonl`
+- **Codex**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (current) and
+  `~/.codex/sessions/rollout-*.json` (pre-2025-05 flat format)
+
+Both formats are normalized into one event stream — user / assistant /
+thinking / tool (call + result paired) / system — rendered as a conversation
+timeline with token usage, model, duration, and a single-select detail level
+(`chat` → `+ tools` → `+ thinking` → `all`). Subagent transcripts — Claude
+Code's `<session>/subagents/agent-*.jsonl` and Codex's spawned-thread rollouts
+(linked via `session_meta.source.subagent.thread_spawn.parent_thread_id`) —
+are merged into the parent session and shown as per-agent tab panels on the
+right; spawned rollouts are hidden from the session list. JSON tool inputs render as key/value rows with real newlines; images in
+tool results and messages render inline (click to zoom). All UI state — source
+filter, search, detail level, open session, and the anchored event (click any
+bubble to anchor it) — lives in a readable query string
+(`?s=claude:<project>/<session>.jsonl&e=8`), so any view is a
+shareable/bookmarkable URL. The sidebar lists every session across
+both agents, newest first, filterable by source and free text.
+
+- `visualizer/trace_parsers.py` — discovery + format normalization (stdlib only)
+- `visualizer/server.py` — `/api/sessions`, `/api/session?id=…`, static frontend
+- `visualizer/static/` — dependency-free single-page UI
+- `visualizer/test_trace_parsers.py` — parser tests (`uv run pytest visualizer/`)
+
+---
+
 # Claude Code Template
 
 A template for configuring Claude Code hooks to deliver instructions at the most relevant points in the agentic coding lifecycle, instead of overloading CLAUDE.md.

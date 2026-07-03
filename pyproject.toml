@@ -21,7 +21,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = [".claude", "hooks"]
+testpaths = [".claude", "hooks", "visualizer"]
 
 [tool.mypy]
 # The dispatchers in .claude/hooks and .codex/hooks add <repo>/hooks to
