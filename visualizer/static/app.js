@@ -468,6 +468,22 @@ function renderImages(ev) {
   return ev.images.map(u => `<img class="ev-img" src="${esc(u)}" loading="lazy">`).join("");
 }
 
+// Render a message body preserving the original text/image order when the
+// source interleaved them (ev.parts); otherwise fall back to text-then-images.
+function renderMessageBody(ev) {
+  if (!ev.parts || !ev.parts.length) {
+    return renderMarkdown(ev.text || "") + renderImages(ev);
+  }
+  const imgs = ev.images || [];
+  return ev.parts.map(p => {
+    if (p.type === "image") {
+      const u = imgs[p.i];
+      return u ? `<img class="ev-img" src="${esc(u)}" loading="lazy">` : "";
+    }
+    return renderMarkdown(p.text || "");
+  }).join("");
+}
+
 function renderEvent(ev, i, source) {
   const el = document.createElement("div");
   el.className = `event ${ev.kind}` + (source === "codex" ? " codex" : "") +
@@ -482,11 +498,11 @@ function renderEvent(ev, i, source) {
   let inner = "";
   if (ev.kind === "user") {
     inner = head("user", ev) +
-      `<div class="event-body md">${renderMarkdown(ev.text || "")}${renderImages(ev)}</div>`;
+      `<div class="event-body md">${renderMessageBody(ev)}</div>`;
   } else if (ev.kind === "assistant") {
     const who = source === "codex" ? "codex" : "claude";
     inner = head(who, ev) +
-      `<div class="event-body md">${renderMarkdown(ev.text || "")}${renderImages(ev)}</div>`;
+      `<div class="event-body md">${renderMessageBody(ev)}</div>`;
   } else if (ev.kind === "thinking") {
     el.classList.add("collapsible");
     const summary = (ev.text || "").split("\n")[0]

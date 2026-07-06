@@ -376,31 +376,69 @@ def _claude_user_record(record: JsonDict, ts: str | None,
 # ---------------------------------------------------------------------------
 # Codex
 
-def _flatten_codex_blocks(blocks: list[object]) -> tuple[list[str], list[str]]:
+def _flatten_codex_blocks(
+    blocks: list[object],
+) -> tuple[list[str], list[str], list[JsonDict]]:
     """Flatten a list of content blocks (Responses API or MCP style).
 
     Handles text / input_text / output_text, MCP image blocks
     ({"type": "image", "data": ..., "mimeType": ...}) and Responses
     input_image blocks ({"type": "input_image", "image_url": ...}).
+
+    Returns (texts, images, parts): texts and images are the flat lists callers
+    have always used; parts preserves the original block ORDER so callers that
+    care (e.g. a message with captions interleaved between images) can render
+    text and images in sequence. Image parts reference images by index
+    ({"type": "image", "i": n}) rather than re-embedding the data URI.
     """
     texts: list[str] = []
     images: list[str] = []
+    parts: list[JsonDict] = []
+
+    def add_text(s: str) -> None:
+        if not s:
+            return
+        texts.append(s)
+        if parts and parts[-1].get("type") == "text":
+            parts[-1]["text"] += "\n" + s  # merge consecutive text runs
+        else:
+            parts.append({"type": "text", "text": s})
+
+    def add_image(uri: str) -> None:
+        parts.append({"type": "image", "i": len(images)})
+        images.append(uri)
+
     for raw_block in blocks:
         block = _as_dict(raw_block)
         btype = block.get("type")
         if btype in ("text", "input_text", "output_text"):
-            texts.append(_as_str(block.get("text")) or "")
+            add_text(_as_str(block.get("text")) or "")
         elif btype == "image" and block.get("data"):
             if len(images) < MAX_IMAGES:
                 mime = _as_str(block.get("mimeType")) or "image/png"
-                images.append(f"data:{mime};base64,{block['data']}")
+                add_image(f"data:{mime};base64,{block['data']}")
         elif btype == "input_image":
             uri = _as_str(block.get("image_url"))
             if uri and len(images) < MAX_IMAGES:
-                images.append(uri)
+                add_image(uri)
         elif block:
-            texts.append(json.dumps(block))
-    return [t for t in texts if t], images
+            add_text(json.dumps(block))
+    return texts, images, parts
+
+
+def _parts_interleave(parts: list[JsonDict]) -> bool:
+    """True only when text follows an image, so the order carries information.
+
+    Pure text, or text-then-images, renders identically whether or not we keep
+    the ordered parts, so those cases don't need the extra field.
+    """
+    seen_image = False
+    for part in parts:
+        if part.get("type") == "image":
+            seen_image = True
+        elif seen_image:
+            return True
+    return False
 
 
 # Codex's tool harness prepends metadata lines to output text, e.g.
@@ -461,7 +499,7 @@ def _extract_mcp_content(text: str) -> tuple[str, list[str]] | None:
             return None
     if not isinstance(blocks, list):
         return None
-    texts, images = _flatten_codex_blocks(blocks)
+    texts, images, _ = _flatten_codex_blocks(blocks)
     if not texts and not images:
         return None
     prefix = text[:idx].rstrip()
@@ -475,16 +513,20 @@ def _codex_payload_to_events(payload: JsonDict, ts: str | None,
     ptype = payload.get("type")
     if ptype == "message":
         role = payload.get("role")
-        texts, images = _flatten_codex_blocks(_as_list(payload.get("content")))
+        texts, images, parts = _flatten_codex_blocks(_as_list(payload.get("content")))
         text = "\n".join(texts)
         if not text and not images:
             return
+        # Preserve original text/image order only when it actually interleaves;
+        # a plain text run (or text-then-images) renders the same either way, so
+        # skip the extra field to keep events lean.
+        ordered = parts if _parts_interleave(parts) else None
         if role == "assistant":
-            events.append(_event("assistant", ts, text=text, images=images or None))
+            events.append(_event("assistant", ts, text=text, images=images or None, parts=ordered))
         elif role in ("developer", "system") or _is_injected_context(text):
-            events.append(_event("system", ts, text=text, images=images or None))
+            events.append(_event("system", ts, text=text, images=images or None, parts=ordered))
         else:
-            events.append(_event("user", ts, text=text, images=images or None))
+            events.append(_event("user", ts, text=text, images=images or None, parts=ordered))
     elif ptype == "reasoning":
         parts = [_as_str(_as_dict(s).get("text")) or "" for s in _as_list(payload.get("summary"))]
         text = "\n\n".join(p for p in parts if p)
@@ -529,7 +571,7 @@ def _codex_payload_to_events(payload: JsonDict, ts: str | None,
         elif isinstance(output, dict):
             output = output.get("output") or json.dumps(output)
         if isinstance(output, list):  # content blocks, possibly with images
-            out_texts, out_images = _flatten_codex_blocks(output)
+            out_texts, out_images, _ = _flatten_codex_blocks(output)
             output = "\n".join(out_texts)
         if isinstance(output, str):
             # harness wrapper lines (Wall time / exit code / ...) -> structured meta
