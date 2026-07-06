@@ -290,13 +290,19 @@ function renderHeader(meta) {
   const parts = [];
   if (meta.cwd) parts.push(`<span class="cwd-link" title="filter sessions to this project">&#128193; <b>${esc(meta.cwd)}</b></span>`);
   if (meta.model) parts.push(`<span>model <b>${esc(meta.model)}</b></span>`);
+  if (meta.contextWindow) parts.push(`<span title="model context window">ctx <b>${fmtTokens(meta.contextWindow)}</b></span>`);
   if (meta.version) parts.push(`<span>v<b>${esc(meta.version)}</b></span>`);
   if (meta.gitBranch) parts.push(`<span>&#8963; <b>${esc(meta.gitBranch)}</b></span>`);
   const dur = fmtDuration(meta.started, meta.ended);
   if (meta.started) parts.push(`<span>${new Date(meta.started).toLocaleString()}${dur ? " &middot; " + dur : ""}</span>`);
   const tok = [];
-  if (u.input || u.output) tok.push(`in <b>${fmtTokens(u.input)}</b> / out <b>${fmtTokens(u.output)}</b>`);
-  if (u.cacheRead) tok.push(`cache-read <b>${fmtTokens(u.cacheRead)}</b>`);
+  // Anthropic reports input EXCLUSIVE of cache reads (additive buckets); OpenAI
+  // reports input INCLUSIVE of them (cache-read is a subset). Subtract for codex
+  // so "in / cache-read" means the same additive thing for both providers.
+  const cacheRead = u.cacheRead || 0;
+  const shownInput = meta.source === "codex" ? (u.input || 0) - cacheRead : u.input;
+  if (u.input || u.output) tok.push(`in <b>${fmtTokens(shownInput)}</b> / out <b>${fmtTokens(u.output)}</b>`);
+  if (cacheRead) tok.push(`cache-read <b>${fmtTokens(cacheRead)}</b>`);
   if (u.cacheCreate) tok.push(`cache-write <b>${fmtTokens(u.cacheCreate)}</b>`);
   if (tok.length) parts.push(`<span title="token usage">&#9679; ${tok.join(" &middot; ")}</span>`);
   parts.push(`<span>${c.user || 0} user &middot; ${c.assistant || 0} assistant &middot; ${c.tool || 0} tools</span>`);

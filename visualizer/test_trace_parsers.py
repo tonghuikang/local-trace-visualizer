@@ -189,6 +189,54 @@ def test_codex_jsonl(tmp_path):
     assert result["events"][5]["usage"] == {"input": 120, "output": 40, "cacheRead": 90}
 
 
+def test_codex_mcp_attribution_and_turn_events(tmp_path):
+    records = [
+        {"type": "event_msg", "payload": {
+            "type": "task_started", "model_context_window": 258400}},
+        {"type": "response_item", "payload": {
+            "type": "function_call", "name": "run_python",
+            "arguments": "{\"code\":\"print(1)\"}", "call_id": "c1"}},
+        {"type": "event_msg", "payload": {
+            "type": "mcp_tool_call_end", "call_id": "c1",
+            "invocation": {"server": "codette_python", "tool": "run_python"},
+            "duration": {"secs": 0, "nanos": 39365209}}},
+        {"type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": "c1", "output": "1"}},
+        {"type": "event_msg", "payload": {
+            "type": "turn_aborted", "reason": "interrupted", "duration_ms": 504808}},
+    ]
+    path = _write_jsonl(tmp_path / "rollout-x.jsonl", records)
+    result = parse_codex_jsonl(path)
+    tool = result["events"][0]
+    assert tool["tool"] == "run_python"
+    assert tool["namespace"] == "codette_python"  # server named only in mcp_tool_call_end
+    assert tool["outputMeta"]["wallTime"] == 0.0394
+    assert result["meta"]["contextWindow"] == 258400
+    info = result["events"][-1]
+    assert info["kind"] == "info"
+    assert info["text"] == "⚠ turn interrupted (interrupted) after 504.8s"
+
+
+def test_codex_mcp_wrapper_walltime_wins_over_duration(tmp_path):
+    # A real wrapper "Wall time" in the output must not be overwritten by the event duration.
+    records = [
+        {"type": "response_item", "payload": {
+            "type": "function_call", "name": "run_python",
+            "arguments": "{}", "call_id": "c1"}},
+        {"type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": "c1",
+            "output": "Wall time: 1.5 seconds\nOutput:\nhi"}},
+        {"type": "event_msg", "payload": {
+            "type": "mcp_tool_call_end", "call_id": "c1",
+            "invocation": {"server": "codette_python"},
+            "duration": {"secs": 0, "nanos": 39365209}}},
+    ]
+    path = _write_jsonl(tmp_path / "rollout-x.jsonl", records)
+    tool = parse_codex_jsonl(path)["events"][0]
+    assert tool["output"] == "hi"
+    assert tool["outputMeta"]["wallTime"] == 1.5  # wrapper value preserved
+
+
 def test_codex_tool_error_exit_code(tmp_path):
     records = [
         {"type": "response_item", "payload": {

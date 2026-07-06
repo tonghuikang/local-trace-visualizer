@@ -614,6 +614,7 @@ def parse_codex_jsonl(path: Path, _depth: int = 0) -> JsonDict:
     first_ts: str | None = None
     last_ts: str | None = None
     prev_total: JsonDict | None = None  # dedupes re-emitted token_count events
+    mcp_calls: dict[str, JsonDict] = {}  # call_id -> {server, wallTime} from mcp_tool_call_end
 
     for record in _iter_jsonl(path):
         rtype = record.get("type")
@@ -663,7 +664,43 @@ def parse_codex_jsonl(path: Path, _depth: int = 0) -> JsonDict:
                 duration = payload.get("duration_ms")
                 if isinstance(duration, (int, float)):
                     events.append(_event("info", ts, text=f"turn complete in {duration / 1000:.1f}s"))
+            elif etype == "turn_aborted":
+                reason = _as_str(payload.get("reason")) or "unknown"
+                duration = payload.get("duration_ms")
+                suffix = f" after {duration / 1000:.1f}s" if isinstance(duration, (int, float)) else ""
+                events.append(_event("info", ts, text=f"⚠ turn interrupted ({reason}){suffix}"))
+            elif etype == "task_started":
+                window = payload.get("model_context_window")
+                if isinstance(window, int):
+                    meta.setdefault("contextWindow", window)
+            elif etype == "mcp_tool_call_end":
+                # MCP calls are also logged as function_call/output response_items (rendered
+                # above); this event is the only place the serving MCP server is named.
+                call_id = _as_str(payload.get("call_id"))
+                if call_id:
+                    invocation = _as_dict(payload.get("invocation"))
+                    span = _as_dict(payload.get("duration"))
+                    wall = _as_int(span.get("secs")) + _as_int(span.get("nanos")) / 1e9
+                    mcp_calls[call_id] = {
+                        "server": _as_str(invocation.get("server")),
+                        "wallTime": round(wall, 4) if span else None,
+                    }
             # user_message / agent_message duplicate response_item records; skipped.
+
+    for call_id, info in mcp_calls.items():  # attribute MCP calls to their server (+ wall time)
+        idx = call_index.get(call_id)
+        if idx is None:
+            continue
+        ev = events[idx]
+        if info.get("server"):
+            ev.setdefault("namespace", info["server"])
+        if info.get("wallTime") is not None:
+            out_meta = ev.get("outputMeta")
+            if not isinstance(out_meta, dict):
+                out_meta = {}
+            out_meta.setdefault("wallTime", info["wallTime"])
+            if out_meta:
+                ev["outputMeta"] = out_meta
 
     if _depth < 3:
         _merge_codex_subagents(path, _as_str(meta.get("id")), events, usage, _depth)
