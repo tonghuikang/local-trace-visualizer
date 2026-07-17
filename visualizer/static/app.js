@@ -302,6 +302,17 @@ function renderHeader(meta) {
   const cacheRead = u.cacheRead || 0;
   const shownInput = meta.source === "codex" ? (u.input || 0) - cacheRead : u.input;
   if (u.input || u.output) tok.push(`in <b>${fmtTokens(shownInput)}</b> / out <b>${fmtTokens(u.output)}</b>`);
+  // Unique tokens the session produced and held, vs "in" which re-bills
+  // cache-missed prefix. Codex retains reasoning in the thread context, so
+  // finalTokens = final context + final response output covers everything;
+  // Claude prunes prior-turn thinking from context, so fall back to final
+  // context + total output there (retained visible output counts twice).
+  const finalTotal = meta.finalTokens ||
+    (meta.finalContext ? meta.finalContext + (u.output || 0) : 0);
+  if (finalTotal) tok.push(
+    `<span title="${meta.finalTokens
+      ? `final request context (${fmtTokens(meta.finalContext)}) + final response output`
+      : `final request context (${fmtTokens(meta.finalContext)}) + total output (${fmtTokens(u.output)})`}">final <b>${fmtTokens(finalTotal)}</b></span>`);
   if (cacheRead) tok.push(`cache-read <b>${fmtTokens(cacheRead)}</b>`);
   if (u.cacheCreate) tok.push(`cache-write <b>${fmtTokens(u.cacheCreate)}</b>`);
   if (tok.length) parts.push(`<span title="token usage">&#9679; ${tok.join(" &middot; ")}</span>`);

@@ -272,6 +272,12 @@ def _claude_record_to_events(record: JsonDict, rtype: object, ts: str | None,
                 "cacheRead": _as_int(raw_usage.get("cache_read_input_tokens")),
                 "cacheCreate": _as_int(raw_usage.get("cache_creation_input_tokens")),
             }
+            if not record.get("isSidechain"):
+                # Anthropic buckets are additive: full context of the final request
+                # (post-compaction if the session compacted); last one wins.
+                meta["finalContext"] = (per_call_usage["input"]
+                                        + per_call_usage["cacheRead"]
+                                        + per_call_usage["cacheCreate"])
         first_idx = len(events)
         sidechain = bool(record.get("isSidechain"))
         for raw_block in _as_list(message.get("content")):
@@ -694,6 +700,17 @@ def parse_codex_jsonl(path: Path, _depth: int = 0) -> JsonDict:
                 if total and total != prev_total:  # re-emitted duplicates carry same totals
                     usage.set_openai_total(total)
                     last = _as_dict(info.get("last_token_usage"))
+                    if last:
+                        # Final request's full input = the context actually held at the
+                        # end (post-compaction if the session compacted); last one wins.
+                        meta["finalContext"] = _as_int(last.get("input_tokens"))
+                        # Unique tokens the session held: final context + the final
+                        # response's output. Codex retains reasoning items in the
+                        # thread context (per-request context growth measures as
+                        # visible output + reasoning + tool content), so prior
+                        # reasoning is already inside finalContext.
+                        meta["finalTokens"] = (meta["finalContext"]
+                                               + _as_int(last.get("output_tokens")))
                     if last and events:  # per-request usage -> most recent event
                         events[-1].setdefault("usage", {
                             "input": _as_int(last.get("input_tokens")),
