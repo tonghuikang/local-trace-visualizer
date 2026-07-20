@@ -303,12 +303,12 @@ function renderHeader(meta) {
   const shownInput = meta.source === "codex" ? (u.input || 0) - cacheRead : u.input;
   if (u.input || u.output) tok.push(`in <b>${fmtTokens(shownInput)}</b> / out <b>${fmtTokens(u.output)}</b>`);
   if (meta.source === "codex") {
-    if (meta.activeContext) tok.push(
-      `<span title="Codex active context used by compaction accounting, including retained encrypted-reasoning estimates">active ctx <b>${fmtTokens(meta.activeContext)}</b></span>`);
-    if (meta.peakActiveContext && meta.peakActiveContext !== meta.activeContext) tok.push(
-      `<span title="largest Codex active-context count observed before${meta.contextCompacted ? " or during" : ""} compaction">peak ctx <b>${fmtTokens(meta.peakActiveContext)}</b></span>`);
+    if (meta.peakRequestTokens) tok.push(
+      `<span title="largest server-reported API request; Codex does not expose its separate active-context counter here">peak request <b>${fmtTokens(meta.peakRequestTokens)}</b></span>`);
     if (meta.lastRequestTokens) tok.push(
-      `<span title="server-reported tokens for the last API request; this is not Codex's compaction counter">request <b>${fmtTokens(meta.lastRequestTokens)}</b></span>`);
+      `<span title="server-reported tokens for the last API request">last request <b>${fmtTokens(meta.lastRequestTokens)}</b></span>`);
+    if (meta.contextCompacted) tok.push(
+      `<span title="Codex compacted this thread; the rollout does not expose the exact trigger count">compacted</span>`);
   } else {
     // Claude prunes prior-turn thinking; this remains a provider usage summary,
     // not a Codex-style compaction counter.
@@ -457,7 +457,6 @@ function head(who, ev, summary, extra = "") {
     }
     parts.push(`${fmtTokens(u.output)} output`);
     if (u.requestTokens) parts.push(`${fmtTokens(u.requestTokens)} request total`);
-    if (u.activeContext) parts.push(`${fmtTokens(u.activeContext)} active context`);
     // comma, not an arrow: write and output are separate counts, not a flow
     tok = `<span class="tok" title="${esc(parts.join(" · "))}">` +
       `${fmtTokens(written)}, ${fmtTokens(u.output)}</span>`;

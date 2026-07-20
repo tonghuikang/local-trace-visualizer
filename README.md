@@ -27,6 +27,10 @@ bubble to anchor it) — lives in a readable query string
 shareable/bookmarkable URL. The sidebar lists every session across
 both agents, newest first, filterable by source and free text.
 
+For Codex traces, the header shows server-reported last/peak API request tokens
+and marks compacted sessions. Rollouts do not expose Codex's separate internal
+active-context counter, so the visualizer does not invent one.
+
 - `visualizer/trace_parsers.py` — discovery + format normalization (stdlib only)
 - `visualizer/server.py` — `/api/sessions`, `/api/session?id=…`, static frontend
 - `visualizer/static/` — dependency-free single-page UI

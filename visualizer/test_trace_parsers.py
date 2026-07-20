@@ -188,16 +188,15 @@ def test_codex_jsonl(tmp_path):
     # last_token_usage lands on the most recent event (the assistant reply)
     assert result["events"][5]["usage"] == {
         "input": 120, "output": 40, "cacheRead": 90,
-        "requestTokens": 160, "activeContext": 160,
+        "requestTokens": 160,
     }
     assert meta["lastRequestTokens"] == 160
-    assert meta["activeContext"] == 160
-    assert meta["peakActiveContext"] == 160
+    assert meta["peakRequestTokens"] == 160
 
 
-def test_codex_compaction_accounting_is_not_request_usage(tmp_path):
-    # Mirrors the dc22 trigger: request total 139,423 + retained encrypted
-    # reasoning 107,751 + a 93-token local tool result = active context 247,267.
+def test_codex_compaction_does_not_invent_active_context(tmp_path):
+    # Mirrors the dc22 trigger. The rollout reports a 139,423-token request and
+    # a compaction, but not Codex core's separate active-context counter.
     tool_output = {
         "type": "function_call_output",
         "call_id": "call_6SvjNmrHZPlkEhbaqMe5zMHo",
@@ -250,10 +249,9 @@ def test_codex_compaction_accounting_is_not_request_usage(tmp_path):
     meta = result["meta"]
 
     assert meta["lastRequestTokens"] == 139_423
-    assert meta["activeContext"] == 13_459
-    assert meta["peakActiveContext"] == 247_267
-    assert meta["preCompactionContext"] == 247_267
+    assert meta["peakRequestTokens"] == 139_423
     assert meta["contextCompacted"] is True
+    assert "activeContext" not in meta
 
 
 def test_codex_mcp_attribution_and_turn_events(tmp_path):
