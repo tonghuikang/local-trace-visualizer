@@ -208,6 +208,145 @@ class _UsageTally:
         }
 
 
+# Codex's API usage and its compaction counter are deliberately different.
+# The latter adds estimates for encrypted reasoning retained from older turns
+# and local items appended after the last model response. This mirrors Codex
+# ContextManager accounting instead of presenting request input as context.
+_CODEX_MODEL_ITEM_TYPES = {
+    "reasoning", "function_call", "tool_search_call", "web_search_call",
+    "image_generation_call", "custom_tool_call", "local_shell_call",
+    "compaction", "context_compaction",
+}
+
+
+def _codex_item_text(item: JsonDict) -> str:
+    return "\n".join(
+        _as_str(_as_dict(part).get("text")) or ""
+        for part in _as_list(item.get("content"))
+    )
+
+
+def _codex_is_user_boundary(item: JsonDict) -> bool:
+    return item.get("type") == "agent_message" or (
+        item.get("type") == "message"
+        and item.get("role") == "user"
+        and not _is_injected_context(_codex_item_text(item))
+    )
+
+
+def _codex_is_model_item(item: JsonDict) -> bool:
+    return (
+        item.get("type") == "message" and item.get("role") == "assistant"
+    ) or item.get("type") in _CODEX_MODEL_ITEM_TYPES
+
+
+def _codex_structured_content(item: JsonDict) -> list[object]:
+    if item.get("type") == "message":
+        return _as_list(item.get("content"))
+    if item.get("type") in ("function_call_output", "custom_tool_call_output"):
+        return _as_list(item.get("output"))
+    return []
+
+
+def _codex_image_payload_len(url: object) -> int:
+    if not isinstance(url, str) or url[:5].lower() != "data:":
+        return 0
+    metadata, separator, payload = url.partition(",")
+    parts = metadata[5:].split(";")
+    if not separator or not parts or not parts[0].lower().startswith("image/"):
+        return 0
+    return len(payload) if any(p.lower() == "base64" for p in parts[1:]) else 0
+
+
+def _codex_item_tokens(item: JsonDict) -> int:
+    encrypted = _as_str(item.get("encrypted_content"))
+    if encrypted is not None and item.get("type") in (
+        "reasoning", "compaction", "context_compaction",
+    ):
+        visible_bytes = max((len(encrypted) * 3) // 4 - 650, 0)
+    else:
+        visible_bytes = len(json.dumps(
+            item, ensure_ascii=False, separators=(",", ":")
+        ).encode())
+        for raw_part in _codex_structured_content(item):
+            part = _as_dict(raw_part)
+            if part.get("type") == "input_image":
+                payload_len = _codex_image_payload_len(part.get("image_url"))
+                if payload_len:
+                    # Codex's fixed estimate for every detail except "original".
+                    visible_bytes += 7_373 - payload_len
+            elif part.get("type") == "encrypted_content":
+                value = _as_str(part.get("encrypted_content"))
+                if value is not None:
+                    visible_bytes += (len(value) * 9 + 15) // 16 - len(value)
+    return (max(visible_bytes, 0) + 3) // 4
+
+
+class _CodexContextAccounting:
+    """Track request usage and Codex's separate active-context estimate."""
+
+    def __init__(self) -> None:
+        self.history: list[JsonDict] = []
+        self.active = 0
+        self.peak = 0
+        self.before_compaction = 0
+        self.last_request = 0
+        self.compacted = False
+
+    def add_item(self, item: JsonDict) -> None:
+        if item.get("type") in ("compaction_trigger", "other"):
+            return
+        if item.get("type") == "message" and item.get("role") == "system":
+            return
+        self.history.append(item)
+
+    def replace_after_compaction(self, payload: JsonDict) -> None:
+        replacement = payload.get("replacement_history")
+        if isinstance(replacement, list):
+            self.history = [_as_dict(item) for item in replacement if isinstance(item, dict)]
+        self.before_compaction = max(self.before_compaction, self.active)
+        self.compacted = True
+
+    def add_token_count(self, info: JsonDict) -> tuple[int, int]:
+        last = _as_dict(info.get("last_token_usage"))
+        request_input = _as_int(last.get("input_tokens"))
+        request_output = _as_int(last.get("output_tokens"))
+        request_total = (_as_int(last.get("total_tokens"))
+                         or request_input + request_output)
+        if not request_total:
+            return 0, 0
+
+        last_user = next((i for i in range(len(self.history) - 1, -1, -1)
+                          if _codex_is_user_boundary(self.history[i])), None)
+        older_reasoning = sum(
+            _codex_item_tokens(item)
+            for item in self.history[:last_user] if last_user is not None
+            if item.get("type") == "reasoning" and item.get("encrypted_content")
+        )
+        last_model = next((i for i in range(len(self.history) - 1, -1, -1)
+                           if _codex_is_model_item(self.history[i])), None)
+        local_tail = sum(
+            _codex_item_tokens(item) for item in self.history[last_model + 1:]
+        ) if last_model is not None else 0
+        self.active = request_total + older_reasoning + local_tail
+        self.peak = max(self.peak, self.active)
+
+        # A post-compaction recomputation has zero request buckets and a local
+        # total. Keep it as active context without calling it an API request.
+        if request_input or request_output:
+            self.last_request = request_total
+        return request_total, self.active
+
+    def as_meta(self) -> JsonDict:
+        return {
+            "activeContext": self.active,
+            "peakActiveContext": self.peak,
+            "preCompactionContext": self.before_compaction,
+            "lastRequestTokens": self.last_request,
+            "contextCompacted": self.compacted,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Claude Code
 
@@ -663,6 +802,7 @@ def parse_codex_jsonl(path: Path, _depth: int = 0) -> JsonDict:
     last_ts: str | None = None
     prev_total: JsonDict | None = None  # dedupes re-emitted token_count events
     mcp_calls: dict[str, JsonDict] = {}  # call_id -> {server, wallTime} from mcp_tool_call_end
+    context = _CodexContextAccounting()
 
     for record in _iter_jsonl(path):
         rtype = record.get("type")
@@ -691,32 +831,30 @@ def parse_codex_jsonl(path: Path, _depth: int = 0) -> JsonDict:
                 meta["model"] = payload["model"]
             meta.setdefault("cwd", payload.get("cwd"))
         elif rtype == "response_item":
+            context.add_item(payload)
             _codex_payload_to_events(payload, ts, events, call_index)
+        elif rtype == "compacted":
+            context.replace_after_compaction(payload)
         elif rtype == "event_msg":
             etype = payload.get("type")
             if etype == "token_count":
                 info = _as_dict(payload.get("info"))
+                request_tokens, active_context = context.add_token_count(info)
                 total = _as_dict(info.get("total_token_usage") or info.get("last_token_usage"))
                 if total and total != prev_total:  # re-emitted duplicates carry same totals
                     usage.set_openai_total(total)
                     last = _as_dict(info.get("last_token_usage"))
-                    if last:
-                        # Final request's full input = the context actually held at the
-                        # end (post-compaction if the session compacted); last one wins.
-                        meta["finalContext"] = _as_int(last.get("input_tokens"))
-                        # Unique tokens the session held: final context + the final
-                        # response's output. Codex retains reasoning items in the
-                        # thread context (per-request context growth measures as
-                        # visible output + reasoning + tool content), so prior
-                        # reasoning is already inside finalContext.
-                        meta["finalTokens"] = (meta["finalContext"]
-                                               + _as_int(last.get("output_tokens")))
                     if last and events:  # per-request usage -> most recent event
-                        events[-1].setdefault("usage", {
-                            "input": _as_int(last.get("input_tokens")),
-                            "output": _as_int(last.get("output_tokens")),
-                            "cacheRead": _as_int(last.get("cached_input_tokens")),
-                        })
+                        request_input = _as_int(last.get("input_tokens"))
+                        request_output = _as_int(last.get("output_tokens"))
+                        if request_input or request_output:
+                            events[-1].setdefault("usage", {
+                                "input": request_input,
+                                "output": request_output,
+                                "cacheRead": _as_int(last.get("cached_input_tokens")),
+                                "requestTokens": request_tokens,
+                                "activeContext": active_context,
+                            })
                 if total:
                     prev_total = total
             elif etype == "task_complete":
@@ -732,6 +870,8 @@ def parse_codex_jsonl(path: Path, _depth: int = 0) -> JsonDict:
                 window = payload.get("model_context_window")
                 if isinstance(window, int):
                     meta.setdefault("contextWindow", window)
+            elif etype == "context_compacted":
+                events.append(_event("info", ts, text="↺ context compacted"))
             elif etype == "mcp_tool_call_end":
                 # MCP calls are also logged as function_call/output response_items (rendered
                 # above); this event is the only place the serving MCP server is named.
@@ -763,6 +903,7 @@ def parse_codex_jsonl(path: Path, _depth: int = 0) -> JsonDict:
 
     if _depth < 3:
         _merge_codex_subagents(path, _as_str(meta.get("id")), events, usage, _depth)
+    meta.update(context.as_meta())
     meta.update(_finish_meta(events, None, first_ts, last_ts, usage))
     return {"meta": meta, "events": events}
 

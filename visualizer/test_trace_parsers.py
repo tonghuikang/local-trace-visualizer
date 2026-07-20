@@ -186,7 +186,74 @@ def test_codex_jsonl(tmp_path):
     assert meta["usage"]["output"] == 250
     assert meta["usage"]["cacheRead"] == 400
     # last_token_usage lands on the most recent event (the assistant reply)
-    assert result["events"][5]["usage"] == {"input": 120, "output": 40, "cacheRead": 90}
+    assert result["events"][5]["usage"] == {
+        "input": 120, "output": 40, "cacheRead": 90,
+        "requestTokens": 160, "activeContext": 160,
+    }
+    assert meta["lastRequestTokens"] == 160
+    assert meta["activeContext"] == 160
+    assert meta["peakActiveContext"] == 160
+
+
+def test_codex_compaction_accounting_is_not_request_usage(tmp_path):
+    # Mirrors the dc22 trigger: request total 139,423 + retained encrypted
+    # reasoning 107,751 + a 93-token local tool result = active context 247,267.
+    tool_output = {
+        "type": "function_call_output",
+        "call_id": "call_6SvjNmrHZPlkEhbaqMe5zMHo",
+        "output": [
+            {"type": "input_text", "text":
+             "0 {'n': 0} [(4, (32, 34, 33, 35))]\n"
+             "1 {'n': 0} [(4, (32, 34, 33, 35))]\n"},
+            {"type": "input_text", "text":
+             "178 actions, 2 in last\n312 frames, 2 in last (1 + 1)"},
+        ],
+        "internal_chat_message_metadata_passthrough": {
+            "turn_id": "019f7dd9-15a5-7241-8a44-1850ef5be80d"
+        },
+    }
+    records = [
+        {"type": "session_meta", "payload": {"id": "thread-1"}},
+        {"type": "response_item", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "first turn"}]}},
+        {"type": "response_item", "payload": {
+            "type": "reasoning", "summary": [],
+            # This encoded length maps to 107,751 tokens under Codex's
+            # ((len * 3 / 4) - 650) / 4 estimator.
+            "encrypted_content": "x" * 575_539}},
+        {"type": "response_item", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "continue"}]}},
+        {"type": "response_item", "payload": {
+            "type": "reasoning", "summary": [],
+            "encrypted_content": "current reasoning is in request usage"}},
+        {"type": "response_item", "payload": {
+            "type": "function_call", "name": "run_python", "arguments": "{}",
+            "call_id": tool_output["call_id"]}},
+        {"type": "response_item", "payload": tool_output},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 1, "output_tokens": 1},
+            "last_token_usage": {
+                "input_tokens": 138_813, "output_tokens": 610,
+                "total_tokens": 139_423}}}},
+        {"type": "compacted", "payload": {"replacement_history": [{
+            "type": "compaction", "encrypted_content": "x" * 1_000}]}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 1, "output_tokens": 1},
+            "last_token_usage": {
+                "input_tokens": 0, "output_tokens": 0,
+                "total_tokens": 13_459}}}},
+        {"type": "event_msg", "payload": {"type": "context_compacted"}},
+    ]
+    result = parse_codex_jsonl(_write_jsonl(tmp_path / "rollout-x.jsonl", records))
+    meta = result["meta"]
+
+    assert meta["lastRequestTokens"] == 139_423
+    assert meta["activeContext"] == 13_459
+    assert meta["peakActiveContext"] == 247_267
+    assert meta["preCompactionContext"] == 247_267
+    assert meta["contextCompacted"] is True
 
 
 def test_codex_mcp_attribution_and_turn_events(tmp_path):

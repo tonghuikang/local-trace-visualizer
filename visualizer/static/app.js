@@ -290,7 +290,7 @@ function renderHeader(meta) {
   const parts = [];
   if (meta.cwd) parts.push(`<span class="cwd-link" title="filter sessions to this project">&#128193; <b>${esc(meta.cwd)}</b></span>`);
   if (meta.model) parts.push(`<span>model <b>${esc(meta.model)}</b></span>`);
-  if (meta.contextWindow) parts.push(`<span title="model context window">ctx <b>${fmtTokens(meta.contextWindow)}</b></span>`);
+  if (meta.contextWindow) parts.push(`<span title="model context window">window <b>${fmtTokens(meta.contextWindow)}</b></span>`);
   if (meta.version) parts.push(`<span>v<b>${esc(meta.version)}</b></span>`);
   if (meta.gitBranch) parts.push(`<span>&#8963; <b>${esc(meta.gitBranch)}</b></span>`);
   const dur = fmtDuration(meta.started, meta.ended);
@@ -302,17 +302,21 @@ function renderHeader(meta) {
   const cacheRead = u.cacheRead || 0;
   const shownInput = meta.source === "codex" ? (u.input || 0) - cacheRead : u.input;
   if (u.input || u.output) tok.push(`in <b>${fmtTokens(shownInput)}</b> / out <b>${fmtTokens(u.output)}</b>`);
-  // Unique tokens the session produced and held, vs "in" which re-bills
-  // cache-missed prefix. Codex retains reasoning in the thread context, so
-  // finalTokens = final context + final response output covers everything;
-  // Claude prunes prior-turn thinking from context, so fall back to final
-  // context + total output there (retained visible output counts twice).
-  const finalTotal = meta.finalTokens ||
-    (meta.finalContext ? meta.finalContext + (u.output || 0) : 0);
-  if (finalTotal) tok.push(
-    `<span title="${meta.finalTokens
-      ? `final request context (${fmtTokens(meta.finalContext)}) + final response output`
-      : `final request context (${fmtTokens(meta.finalContext)}) + total output (${fmtTokens(u.output)})`}">final <b>${fmtTokens(finalTotal)}</b></span>`);
+  if (meta.source === "codex") {
+    if (meta.activeContext) tok.push(
+      `<span title="Codex active context used by compaction accounting, including retained encrypted-reasoning estimates">active ctx <b>${fmtTokens(meta.activeContext)}</b></span>`);
+    if (meta.peakActiveContext && meta.peakActiveContext !== meta.activeContext) tok.push(
+      `<span title="largest Codex active-context count observed before${meta.contextCompacted ? " or during" : ""} compaction">peak ctx <b>${fmtTokens(meta.peakActiveContext)}</b></span>`);
+    if (meta.lastRequestTokens) tok.push(
+      `<span title="server-reported tokens for the last API request; this is not Codex's compaction counter">request <b>${fmtTokens(meta.lastRequestTokens)}</b></span>`);
+  } else {
+    // Claude prunes prior-turn thinking; this remains a provider usage summary,
+    // not a Codex-style compaction counter.
+    const finalTotal = meta.finalTokens ||
+      (meta.finalContext ? meta.finalContext + (u.output || 0) : 0);
+    if (finalTotal) tok.push(
+      `<span title="final request context (${fmtTokens(meta.finalContext)}) + total output (${fmtTokens(u.output)})">final <b>${fmtTokens(finalTotal)}</b></span>`);
+  }
   if (cacheRead) tok.push(`cache-read <b>${fmtTokens(cacheRead)}</b>`);
   if (u.cacheCreate) tok.push(`cache-write <b>${fmtTokens(u.cacheCreate)}</b>`);
   if (tok.length) parts.push(`<span title="token usage">&#9679; ${tok.join(" &middot; ")}</span>`);
@@ -452,6 +456,8 @@ function head(who, ev, summary, extra = "") {
       if (u.cacheRead) parts.push(`${fmtTokens(u.cacheRead)} cached input`);
     }
     parts.push(`${fmtTokens(u.output)} output`);
+    if (u.requestTokens) parts.push(`${fmtTokens(u.requestTokens)} request total`);
+    if (u.activeContext) parts.push(`${fmtTokens(u.activeContext)} active context`);
     // comma, not an arrow: write and output are separate counts, not a flow
     tok = `<span class="tok" title="${esc(parts.join(" · "))}">` +
       `${fmtTokens(written)}, ${fmtTokens(u.output)}</span>`;
