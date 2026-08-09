@@ -14,6 +14,7 @@ import ast
 import json
 import os
 import re
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -21,6 +22,9 @@ JsonDict = dict[str, object]
 
 CLAUDE_ROOT = Path(os.environ.get("CLAUDE_TRACE_DIR", "~/.claude/projects")).expanduser()
 CODEX_ROOT = Path(os.environ.get("CODEX_TRACE_DIR", "~/.codex/sessions")).expanduser()
+CODEX_STATE_DB = Path(
+    os.environ.get("CODEX_STATE_DB", "~/.codex/state_5.sqlite")
+).expanduser()
 
 MAX_TEXT_LEN = 200_000  # per-event cap so one giant tool output can't bloat the payload
 
@@ -85,6 +89,24 @@ def _iter_jsonl(path: Path) -> Iterator[JsonDict]:
                 continue
             if isinstance(record, dict):
                 yield record
+
+
+def _codex_thread_names() -> dict[str, str]:
+    """Read explicit SDK thread names without mutating Codex's state database."""
+    if not CODEX_STATE_DB.is_file():
+        return {}
+    try:
+        uri = f"{CODEX_STATE_DB.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as db:
+            rows = db.execute("SELECT id, title, name FROM threads")
+            names = {}
+            for thread_id, title, name in rows:
+                display = name if isinstance(name, str) and name.strip() else title
+                if isinstance(display, str) and display.strip():
+                    names[str(thread_id)] = display
+            return names
+    except (OSError, sqlite3.Error):
+        return {}
 
 
 def _clip(text: str) -> tuple[str, bool]:
@@ -798,7 +820,8 @@ def parse_codex_jsonl(path: Path, _depth: int = 0) -> JsonDict:
     if _depth < 3:
         _merge_codex_subagents(path, _as_str(meta.get("id")), events, usage, _depth)
     meta.update(requests.as_meta())
-    meta.update(_finish_meta(events, None, first_ts, last_ts, usage))
+    title = _codex_thread_names().get(_as_str(meta.get("id")) or "")
+    meta.update(_finish_meta(events, title, first_ts, last_ts, usage))
     return {"meta": meta, "events": events}
 
 
@@ -874,7 +897,7 @@ def _claude_preview(path: Path) -> dict[str, str | None]:
 
 
 def _codex_jsonl_preview(path: Path) -> dict[str, str | None]:
-    cwd = preview = None
+    cwd = preview = thread_id = None
     with open(path, encoding="utf-8", errors="replace") as f:
         for i, line in enumerate(f):
             if i > 100 or (preview and cwd):
@@ -893,6 +916,7 @@ def _codex_jsonl_preview(path: Path) -> dict[str, str | None]:
                     # spawned-subagent rollout; rendered inside its parent session
                     return {"cwd": None, "preview": None, "subagent": "1"}
                 cwd = _as_str(payload.get("cwd"))
+                thread_id = _as_str(payload.get("id"))
             elif record.get("type") == "event_msg" and payload.get("type") == "user_message":
                 message = _as_str(payload.get("message")) or ""
                 if message and not _is_injected_context(message):
@@ -906,7 +930,7 @@ def _codex_jsonl_preview(path: Path) -> dict[str, str | None]:
                         if text and not _is_injected_context(text):
                             preview = text
                             break
-    return {"cwd": cwd, "preview": preview}
+    return {"cwd": cwd, "preview": preview, "thread_id": thread_id}
 
 
 def _codex_flat_preview(path: Path) -> dict[str, str | None]:
@@ -945,6 +969,7 @@ def _cached_preview(path: Path, kind: str) -> dict[str, str | None]:
 
 def list_sessions() -> list[JsonDict]:
     sessions: list[JsonDict] = []
+    codex_names = _codex_thread_names()
 
     if CLAUDE_ROOT.is_dir():
         for project_dir in sorted(CLAUDE_ROOT.iterdir()):
@@ -964,7 +989,8 @@ def list_sessions() -> list[JsonDict]:
                 info = _cached_preview(path, "codex_jsonl")
                 if info.get("subagent"):
                     continue
-                sessions.append(_session_entry("codex", path, info["cwd"], info["preview"]))
+                name = codex_names.get(info.get("thread_id") or "")
+                sessions.append(_session_entry("codex", path, info["cwd"], name or info["preview"]))
             except OSError:
                 continue
         for path in CODEX_ROOT.glob("rollout-*.json"):

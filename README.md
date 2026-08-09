@@ -12,6 +12,9 @@ It reads, live from disk (no copies, no network):
 - **Codex**: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (current) and
   `~/.codex/sessions/rollout-*.json` (pre-2025-05 flat format)
 
+Explicit Codex SDK thread titles are read from `~/.codex/state_5.sqlite` in
+read-only mode; the rollout remains the sole source of conversation events.
+
 Both formats are normalized into one event stream — user / assistant /
 thinking / tool (call + result paired) / system — rendered as a conversation
 timeline with token usage, model, duration, and a single-select detail level

@@ -238,10 +238,10 @@ function renderSessionList() {
     el.innerHTML = `
       <div class="session-top">
         <span class="badge ${s.source}">${s.source === "claude" ? "CC" : "CX"}</span>
-        <span class="session-project" title="${esc(s.cwd || "")}">${esc(s.project)}</span>
+        <span class="session-title" title="${esc(s.preview)}">${esc(s.preview)}</span>
         <span class="session-time">${new Date(s.mtime * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
       </div>
-      <div class="session-preview">${esc(s.preview)}</div>`;
+      <div class="session-context" title="${esc(s.cwd || "")}">${esc(s.project)}</div>`;
     el.addEventListener("click", () => openSession(s.id));
     frag.appendChild(el);
   }
@@ -264,8 +264,16 @@ async function openSession(id, push = true) {
   state.activeId = id;
   if (push) state.eventIdx = null; // fresh navigation drops the anchor
   syncUrl(push);
-  document.querySelectorAll(".session").forEach(el =>
-    el.classList.toggle("active", el.dataset.id === id));
+  let activeRow = null;
+  document.querySelectorAll(".session").forEach(el => {
+    const active = el.dataset.id === id;
+    el.classList.toggle("active", active);
+    if (active) activeRow = el;
+  });
+  // Direct links open a session independently of the sidebar's scroll position.
+  // Keep the selected row visible so the sidebar cannot appear to identify a
+  // different (newer) session at the top of the list.
+  if (activeRow) activeRow.scrollIntoView({ block: "nearest", inline: "nearest" });
   $("#placeholder").hidden = true;
   const trace = $("#trace");
   trace.hidden = false;
@@ -280,6 +288,14 @@ async function openSession(id, push = true) {
     return;
   }
   state.session = data;
+  const title = data.meta.title || "";
+  const listedSession = state.sessions.find(s => s.id === id);
+  if (title && listedSession) listedSession.preview = title;
+  const activeTitle = document.querySelector(".session.active .session-title");
+  if (title && activeTitle) {
+    activeTitle.textContent = title;
+    activeTitle.title = title;
+  }
   renderHeader(data.meta);
   renderEvents(data);
 }

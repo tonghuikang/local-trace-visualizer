@@ -1,6 +1,7 @@
 """Tests for the trace parsers, using synthetic fixture files."""
 
 import json
+import sqlite3
 from pathlib import Path
 
 import trace_parsers
@@ -393,6 +394,32 @@ def test_list_sessions_discovers_all_formats(tmp_path, monkeypatch):
     # ids resolve back through load_session
     loaded = trace_parsers.load_session(by_preview["solve the puzzle"]["id"])
     assert loaded["meta"]["model"] == "gpt-5"
+
+
+def test_codex_explicit_thread_name_overrides_first_user_message(tmp_path, monkeypatch):
+    codex_root = tmp_path / "codex"
+    rollout = codex_root / "2026" / "08" / "08" / "rollout-named.jsonl"
+    rollout.parent.mkdir(parents=True)
+    _write_jsonl(rollout, _codex_records())
+
+    state_db = tmp_path / "state.sqlite"
+    with sqlite3.connect(state_db) as db:
+        db.execute(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT)"
+        )
+        db.execute(
+            "INSERT INTO threads (id, title) VALUES (?, ?)",
+            ("0199", "analyze-cd82-0806-1654-lv02"),
+        )
+
+    monkeypatch.setattr(trace_parsers, "CLAUDE_ROOT", tmp_path / "none")
+    monkeypatch.setattr(trace_parsers, "CODEX_ROOT", codex_root)
+    monkeypatch.setattr(trace_parsers, "CODEX_STATE_DB", state_db)
+    trace_parsers._list_cache.clear()
+
+    sessions = trace_parsers.list_sessions()
+    assert sessions[0]["preview"] == "analyze-cd82-0806-1654-lv02"
+    assert parse_codex_jsonl(rollout)["meta"]["title"] == "analyze-cd82-0806-1654-lv02"
 
 
 def test_claude_image_in_tool_result(tmp_path):
