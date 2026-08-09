@@ -849,7 +849,11 @@ def _finish_meta(events: list[JsonDict], title: str | None, first_ts: str | None
     if not title:
         first_user = next((e for e in events if e["kind"] == "user"), None)
         if first_user:
-            title = " ".join((_as_str(first_user.get("text")) or "").split())[:120]
+            title = _as_str(first_user.get("text")) or ""
+    # Explicit titles are not necessarily short: Codex SDK threads sometimes carry
+    # the whole prompt as their name. Collapse and cap every title, not just the
+    # first-user fallback, so one session cannot blow up the header.
+    title = " ".join((title or "").split())[:120]
     counts: dict[str, int] = {}
     for ev in events:
         kind = str(ev["kind"])

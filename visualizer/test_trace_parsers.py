@@ -422,6 +422,32 @@ def test_codex_explicit_thread_name_overrides_first_user_message(tmp_path, monke
     assert parse_codex_jsonl(rollout)["meta"]["title"] == "analyze-cd82-0806-1654-lv02"
 
 
+def test_explicit_thread_title_is_collapsed_and_capped(tmp_path, monkeypatch):
+    """A thread whose stored name is the whole prompt must not blow up the header."""
+    codex_root = tmp_path / "codex"
+    rollout = codex_root / "2026" / "08" / "08" / "rollout-verbose.jsonl"
+    rollout.parent.mkdir(parents=True)
+    _write_jsonl(rollout, _codex_records())
+
+    state_db = tmp_path / "state.sqlite"
+    with sqlite3.connect(state_db) as db:
+        db.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT)")
+        db.execute(
+            "INSERT INTO threads (id, title) VALUES (?, ?)",
+            ("0199", "Analyze one recorded K3 trace.\n\nTarget\n- Agent: claudette\n" + "x" * 8000),
+        )
+
+    monkeypatch.setattr(trace_parsers, "CLAUDE_ROOT", tmp_path / "none")
+    monkeypatch.setattr(trace_parsers, "CODEX_ROOT", codex_root)
+    monkeypatch.setattr(trace_parsers, "CODEX_STATE_DB", state_db)
+    trace_parsers._list_cache.clear()
+
+    title = parse_codex_jsonl(rollout)["meta"]["title"]
+    assert len(title) == 120
+    assert "\n" not in title
+    assert title.startswith("Analyze one recorded K3 trace. Target - Agent: claudette ")
+
+
 def test_claude_image_in_tool_result(tmp_path):
     records = [
         {"type": "assistant", "message": {"role": "assistant", "content": [

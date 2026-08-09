@@ -338,7 +338,8 @@ function renderHeader(meta) {
   if (tok.length) parts.push(`<span title="token usage">&#9679; ${tok.join(" &middot; ")}</span>`);
   parts.push(`<span>${c.user || 0} user &middot; ${c.assistant || 0} assistant &middot; ${c.tool || 0} tools</span>`);
   $("#trace-head").innerHTML =
-    `<div class="title">${esc(meta.title || "")}</div><div class="meta-row">${parts.join("")}</div>`;
+    `<div class="title" title="${esc(meta.title || "")}">${esc(meta.title || "")}</div>` +
+    `<div class="meta-row">${parts.join("")}</div>`;
   const cwdLink = $("#trace-head .cwd-link");
   if (cwdLink) {
     cwdLink.addEventListener("click", () => {

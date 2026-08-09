@@ -73,9 +73,13 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 #trace[hidden] { display: none; }
 
 #trace-head {
+  flex: none;
   padding: 14px 22px 10px; border-bottom: 1px solid var(--border); background: var(--bg-alt);
 }
-#trace-head .title { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+#trace-head .title {
+  font-size: 15px; font-weight: 600; margin-bottom: 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 #trace-head .meta-row {
   display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline;
   color: var(--text-dim); font-size: 12px; font-family: var(--mono);
@@ -85,6 +89,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--sans); font
 #trace-head .cwd-link:hover b { text-decoration: underline; }
 
 #trace-controls {
+  flex: none;
   display: flex; align-items: center; gap: 14px;
   padding: 8px 22px; border-bottom: 1px solid var(--border);
   font-size: 12px; color: var(--text-dim); background: var(--bg-alt);
