@@ -21,6 +21,17 @@ SAMPLE_RATE = 24000
 SOCKET_PATH = Path(tempfile.gettempdir()) / f"notify_kokoro-{os.getuid()}.sock"
 IDLE_TIMEOUT = 30 * 60  # seconds without a message before the daemon exits
 SPAWN_WAIT = 60  # seconds to wait for a freshly spawned daemon to come up
+NARRATE_FLAG = Path.home() / ".narrate_mute"
+MUTE_SECONDS = 60 * 60  # `ssn` mutes narration for 1 hour
+
+
+def _muted() -> bool:
+    """Re-read the mute flag so messages queued before `ssn` stay silent."""
+    try:
+        mute_since = float(NARRATE_FLAG.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    return time.time() - mute_since < MUTE_SECONDS
 
 
 def _play_wav(path: Path) -> None:
@@ -103,13 +114,13 @@ def daemon() -> None:
                 while chunk := conn.recv(4096):
                     data += chunk
             message = data.decode("utf-8", errors="replace").strip()
-            if not message:
+            if not message or _muted():
                 continue
             chunks = [
                 audio.numpy() if hasattr(audio, "numpy") else np.asarray(audio)
                 for _, _, audio in pipeline(message, voice="af_heart")
             ]
-            if chunks:
+            if chunks and not _muted():  # synthesis takes seconds, so check again
                 _speak_waveform(np.concatenate(chunks))
     finally:
         server.close()
